@@ -19,6 +19,12 @@ generador_clr = importlib.util.module_from_spec(spec)
 sys.modules["generador_clr"] = generador_clr
 spec.loader.exec_module(generador_clr)
 
+# Import generator_lr for LR(0)
+spec_lr = importlib.util.spec_from_file_location("generator_lr", "generator_lr.py")
+generator_lr = importlib.util.module_from_spec(spec_lr)
+sys.modules["generator_lr"] = generator_lr
+spec_lr.loader.exec_module(generator_lr)
+
 # Import primerosysiguientes (dependency of Generador CLR)
 import primerosysiguientes
 import generator_ll
@@ -113,6 +119,17 @@ class ResultsPanel(QWidget):
         # self.tree_layout.addWidget(self.tree_output)
         
         self.tabs.addTab(self.tree_widget, "Parse Tree")
+
+        self.states_text = QPlainTextEdit()
+        self.states_text.setReadOnly(True)
+        self.states_text.setFont(QFont("Consolas", 10))
+        self.tabs.addTab(self.states_text, "States")
+        
+        # Checkbox for LR(0) visual preference
+        self.chk_show_lambda = QCheckBox("Show λ / ε in States")
+        self.chk_show_lambda.setChecked(True) # Default to true as user asked for it
+        # Align it right or left?
+        layout.addWidget(self.chk_show_lambda)
         
         layout.addWidget(self.tabs)
 
@@ -177,6 +194,14 @@ class MainWindow(QMainWindow):
         self.intermediate_tabs.addTab(self.productions_list, "Numbered Rules") # Moved from Output
         
         intermediate_layout.addWidget(self.intermediate_tabs)
+
+        self.states_text = QPlainTextEdit()
+        self.states_text.setReadOnly(True)
+        self.states_text.setFont(QFont("Consolas", 10))
+        # We will add it to the ResultsPanel tabs instead of intermediate, as per plan or requested?
+        # User said: "en las tabs de la derecha habrá un cambio ya que es ahora lr0, las tabas serán otras que se usaran, comenzemos con mostrando los estados"
+        # So it should be in the right panel (ResultsPanel).
+
         input_splitter.addWidget(intermediate_group)
 
         # --- Right Area ---
@@ -201,6 +226,8 @@ class MainWindow(QMainWindow):
         self.results_panel.export_csv_button.clicked.connect(self.export_csv)
         self.results_panel.parse_btn.clicked.connect(self.parse_input_string)
         self.algo_selector.currentTextChanged.connect(self.on_algo_changed) # New Connection
+        self.results_panel.tabs.currentChanged.connect(lambda: self.update_export_button_text())
+        self.results_panel.chk_show_lambda.stateChanged.connect(self.refresh_lr0_states)
 
         # State storage
         self.current_table = None
@@ -213,11 +240,40 @@ class MainWindow(QMainWindow):
         if algo == "LL(1)":
              self.intermediate_tabs.setTabVisible(0, False) # Closure Hidden
              self.intermediate_tabs.setTabVisible(1, True) # Rules Visible
+             
+             self.results_panel.tabs.setTabVisible(0, True) # Table Visible
+             self.results_panel.tabs.setTabVisible(1, True) # First/Follow Visible
              self.results_panel.tabs.setTabVisible(2, True) # Tree/Steps Visible
-        else:
+             self.results_panel.tabs.setTabVisible(3, False) # States Hidden
+             self.results_panel.chk_show_lambda.setVisible(False) # Checkbox Hidden
+        elif algo == "LR(0)":
+             self.intermediate_tabs.setTabVisible(0, False) # Closure Hidden (using States tab instead)
+             self.intermediate_tabs.setTabVisible(1, True) # Rules Visible
+             
+             self.results_panel.tabs.setTabVisible(0, False) # Table Hidden
+             self.results_panel.tabs.setTabVisible(1, False) # First/Follow Hidden
+             self.results_panel.tabs.setTabVisible(2, False) # Tree Hidden
+             self.results_panel.tabs.setTabVisible(3, True) # States Visible
+             self.results_panel.chk_show_lambda.setVisible(True) # Checkbox Visible
+        else: # Other algorithms (CLR, etc.)
              self.intermediate_tabs.setTabVisible(0, True) # Closure Visible
              self.intermediate_tabs.setTabVisible(1, True) # Rules Visible
+             
+             self.results_panel.tabs.setTabVisible(0, True) # Table Visible
+             self.results_panel.tabs.setTabVisible(1, True) # First/Follow Visible
              self.results_panel.tabs.setTabVisible(2, False) # Tree Hidden
+             self.results_panel.tabs.setTabVisible(3, False) # States Hidden
+             self.results_panel.chk_show_lambda.setVisible(False) # Checkbox Hidden
+        
+        # Update Export Button Text
+        self.update_export_button_text()
+             
+    def update_export_button_text(self):
+        # If LR(0) and States tab is active
+        if self.algo_selector.currentText() == "LR(0)" and self.results_panel.tabs.currentIndex() == 3:
+            self.results_panel.export_csv_button.setText("Export PDF")
+        else:
+            self.results_panel.export_csv_button.setText("Export CSV")
 
     def build_parser(self):
         # 1. Input Validation
@@ -234,7 +290,9 @@ class MainWindow(QMainWindow):
         primerosysiguientes.t_list.clear()
         primerosysiguientes.production_list.clear()
         # Reset specific module lists if they are separate copies (they seem shared via import)
-        generador_clr.nt_list = [] # It's a list proxy in that file? No, it's reassigned from ntl.keys()
+        generador_clr.nt_list = []
+        generator_lr.nt_list = []
+        generator_lr.production_list = []
         
         # 3. Parse Inputs
         # Create Objects for NTs
@@ -289,13 +347,9 @@ class MainWindow(QMainWindow):
             self.update_first_follow_table(first_follow_data)
 
             if algo == "LL(1)":
-                 # Hide/Show Tabs
-                 self.results_panel.tabs.setTabVisible(0, True) # Table
-                 self.results_panel.tabs.setTabVisible(1, True) # First/Follow
-                 self.results_panel.tabs.setTabVisible(2, True) # Tree
-                 
-                 self.intermediate_tabs.setTabVisible(0, False) # Closure (Hidden for LL)
-                 self.intermediate_tabs.setTabVisible(1, True) # Rules
+                  # Note: Tabs visibility is handled by on_algo_changed
+
+                  # LL(1) Specific Logic
 
                  # LL(1) Specific Logic
                  print("--- LL(1) PARSING TABLE ---\\n")
@@ -343,6 +397,36 @@ class MainWindow(QMainWindow):
                 # Step D: Make Table
                 table = generador_clr.make_table(states)
                 self.current_table = table
+            elif algo == "LR(0)":
+                # Augmented Grammar logic similar to CLR but using generator_lr
+                generator_lr.production_list = primerosysiguientes.production_list
+                generator_lr.ntl = primerosysiguientes.nt_list
+                generator_lr.tl = primerosysiguientes.t_list
+                generator_lr.augment_grammar()
+                
+                # Update visual lists from generator module
+                # Note: generator_lr modifies the lists in place provided references are set correctly
+                # We need to reflect the augmented production list in the GUI
+                
+                # UPDATE: Also populate the flat lists required by calc_states
+                generator_lr.nt_list = list(generator_lr.ntl.keys())
+                generator_lr.t_list = list(generator_lr.tl.keys()) + ['$'] # Add EOF if needed, usually $
+                
+                # Step C: Calc States
+                print("--- LR(0) STATES ---\\n")
+                states = generator_lr.calc_states()
+                self.current_states = states
+                
+                # Format output
+                show_lambda = self.results_panel.chk_show_lambda.isChecked()
+                empty_symbol = 'ε' if self.grammar_panel.chk_epsilon.isChecked() else 'λ'
+                formatted_states = generator_lr.format_states_lr0(states, show_lambda=show_lambda, empty_symbol=empty_symbol)
+                self.results_panel.states_text.setPlainText(formatted_states)
+                
+                # Update production list to show augmented rule
+                # generator_lr.production_list has the augmented rules now
+                primerosysiguientes.production_list = generator_lr.production_list # Sync back for display
+                
             else:
                  QMessageBox.information(self, "Info", f"Algorithm {algo} not yet fully implemented in GUI.")
                  return
@@ -361,11 +445,8 @@ class MainWindow(QMainWindow):
         self.update_results_table(self.current_table)
         self.update_productions_list(primerosysiguientes.production_list)
         
-        # Adjust tabs visibility for other algos if needed
-        if algo != "LL(1)":
-            self.intermediate_tabs.setTabVisible(0, True) # Closure
-            self.intermediate_tabs.setTabVisible(1, True) # Rules
-            self.results_panel.tabs.setTabVisible(2, False) # Tree (Hidden for now)
+        # Adjust tabs visibility based on algo selection (redundant but ensures consistency)
+        # self.on_algo_changed(algo) 
 
         QMessageBox.information(self, "Success", "Parser Generated Successfully.")
         
@@ -492,6 +573,11 @@ class MainWindow(QMainWindow):
             self.productions_list.addItem(f"{idx}: {p}")
 
     def export_csv(self):
+        # Check if we should do PDF export instead (LR(0) States)
+        if self.algo_selector.currentText() == "LR(0)" and self.results_panel.tabs.currentIndex() == 3: # States Tab
+             self.export_pdf_lr0()
+             return
+
         # Determine active tab
         current_index = self.results_panel.tabs.currentIndex()
         
@@ -518,7 +604,7 @@ class MainWindow(QMainWindow):
             return
             
         try:
-            with open(file_path, 'w', newline='', encoding='utf-8') as csvfile:
+            with open(file_path, 'w', newline='', encoding='utf-8-sig') as csvfile:
                 writer = csv.writer(csvfile)
                 
                 # Headers
@@ -554,6 +640,39 @@ class MainWindow(QMainWindow):
             
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to export CSV: {str(e)}")
+
+    def refresh_lr0_states(self):
+        if self.algo_selector.currentText() == "LR(0)" and self.current_states:
+             show_lambda = self.results_panel.chk_show_lambda.isChecked()
+             
+             # Determine empty symbol based on input checkboxes
+             empty_symbol = 'ε' if self.grammar_panel.chk_epsilon.isChecked() else 'λ'
+             
+             formatted_states = generator_lr.format_states_lr0(self.current_states, show_lambda=show_lambda, empty_symbol=empty_symbol)
+             self.results_panel.states_text.setPlainText(formatted_states)
+
+    def export_pdf_lr0(self):
+        if not self.current_states:
+             QMessageBox.warning(self, "Warning", "No states to export.")
+             return
+             
+        file_path, _ = QFileDialog.getSaveFileName(self, "Save PDF", "states_lr0.pdf", "PDF Files (*.pdf)")
+        if not file_path:
+            return
+            
+        try:
+            show_lambda = self.results_panel.chk_show_lambda.isChecked()
+            empty_symbol = 'ε' if self.grammar_panel.chk_epsilon.isChecked() else 'λ'
+            
+            generator_lr.export_lr0_items_to_pdf(
+                self.current_states, 
+                filename=file_path, 
+                show_lambda=show_lambda,
+                empty_symbol=empty_symbol
+            )
+            QMessageBox.information(self, "Success", f"States exported to {file_path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to export PDF: {str(e)}\n\n(Make sure 'reportlab' is installed)")
 
 def main():
     app = QApplication(sys.argv)
