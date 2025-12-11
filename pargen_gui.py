@@ -1,13 +1,14 @@
 
 import sys
 import io
+import csv
 import importlib.util
 from collections import OrderedDict
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QComboBox, QLabel, QLineEdit, 
                              QPlainTextEdit, QPushButton, QTabWidget, 
                              QTableWidget, QTableWidgetItem, QHeaderView, 
-                             QSplitter, QFrame, QMessageBox, QListWidget, QCheckBox)
+                             QSplitter, QFrame, QMessageBox, QListWidget, QCheckBox, QFileDialog)
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont, QColor
 
@@ -34,12 +35,12 @@ class GrammarInputPanel(QWidget):
 
         layout.addWidget(QLabel("Non-Terminals (separated by |):"))
         self.nt_input = QLineEdit()
-        self.nt_input.setPlaceholderText("Ej: S|A|B")
+        self.nt_input.setPlaceholderText("Ej: S|A|A'|B")
         layout.addWidget(self.nt_input)
 
         layout.addWidget(QLabel("Terminals (separated by |):"))
         self.t_input = QLineEdit()
-        self.t_input.setPlaceholderText("Ej: a|b|+|*|id")
+        self.t_input.setPlaceholderText("Ej: a|b|id|+|*")
         layout.addWidget(self.t_input)
         
         # Checkboxes for implicit terminals
@@ -59,7 +60,7 @@ class GrammarInputPanel(QWidget):
         
         self.productions_input = QPlainTextEdit()
         self.productions_input.setFont(QFont("Courier New", 10))
-        self.productions_input.setPlaceholderText("S -> A b\nA -> a")
+        self.productions_input.setPlaceholderText("S -> A' b\nA' -> A A'\nA -> id A \nA -> b")
         layout.addWidget(self.productions_input)
 
         self.build_button = QPushButton("Build Parser")
@@ -115,9 +116,9 @@ class ResultsPanel(QWidget):
         
         layout.addWidget(self.tabs)
 
-        self.export_pdf_button = QPushButton("Export PDF Report")
-        self.export_pdf_button.setStyleSheet("background-color: #2196F3; color: white; padding: 8px;")
-        layout.addWidget(self.export_pdf_button)
+        self.export_csv_button = QPushButton("Export CSV")
+        self.export_csv_button.setStyleSheet("background-color: #009688; color: white; padding: 8px;")
+        layout.addWidget(self.export_csv_button)
 
         self.setLayout(layout)
 
@@ -133,6 +134,12 @@ class MainWindow(QMainWindow):
 
         # --- Left Area ---
         input_splitter = QSplitter(Qt.Orientation.Vertical)
+        input_splitter.setStyleSheet("""
+            QSplitter::handle {
+                background-color: #B0B0B0;
+                height: 1px;
+            }
+        """)
         
         top_container = QWidget()
         top_layout = QVBoxLayout(top_container)
@@ -141,7 +148,7 @@ class MainWindow(QMainWindow):
         algo_layout.addWidget(QLabel("Algorithm:"))
         self.algo_selector = QComboBox()
         self.algo_selector.addItems(["LL(1)", "LR(0)", "SLR(1)", "LALR(1)", "CLR(1)"])
-        self.algo_selector.setCurrentText("CLR(1)")
+        self.algo_selector.setCurrentText("LL(1)")
         algo_layout.addWidget(self.algo_selector)
         algo_layout.addStretch()
         top_layout.addLayout(algo_layout)
@@ -176,6 +183,12 @@ class MainWindow(QMainWindow):
         self.results_panel = ResultsPanel()
 
         main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        main_splitter.setStyleSheet("""
+            QSplitter::handle {
+                background-color: #B0B0B0;
+                width: 1px;
+            }
+        """)
         main_splitter.addWidget(input_splitter)
         main_splitter.addWidget(self.results_panel)
         main_splitter.setStretchFactor(0, 1)
@@ -185,7 +198,7 @@ class MainWindow(QMainWindow):
 
         # Connections
         self.grammar_panel.build_button.clicked.connect(self.build_parser)
-        self.results_panel.export_pdf_button.clicked.connect(self.export_pdf)
+        self.results_panel.export_csv_button.clicked.connect(self.export_csv)
         self.results_panel.parse_btn.clicked.connect(self.parse_input_string)
         self.algo_selector.currentTextChanged.connect(self.on_algo_changed) # New Connection
 
@@ -257,7 +270,7 @@ class MainWindow(QMainWindow):
             # --- Common Step: First & Follow ---
             # We always calculate this as it is useful for all (or most)
             # Replicates lines 382-391 in Generador CLR.py logic
-            print("--- FIRST & FOLLOW ---\n")
+            print("--- FIRST & FOLLOW ---\\n")
             first_follow_data = {}
             for nt_name, nt_obj in primerosysiguientes.nt_list.items():
                 primerosysiguientes.compute_first(nt_name)
@@ -269,8 +282,8 @@ class MainWindow(QMainWindow):
                     "follow": primerosysiguientes.get_follow(nt_name)
                 }
                 
-                print(f"{nt_name}\n\tFirst: {first_follow_data[nt_name]['first']}")
-                print(f"\tFollow: {first_follow_data[nt_name]['follow']}\n")
+                print(f"{nt_name}\\n\\tFirst: {first_follow_data[nt_name]['first']}")
+                print(f"\\tFollow: {first_follow_data[nt_name]['follow']}\\n")
             
             # Update First & Follow Table
             self.update_first_follow_table(first_follow_data)
@@ -285,33 +298,19 @@ class MainWindow(QMainWindow):
                  self.intermediate_tabs.setTabVisible(1, True) # Rules
 
                  # LL(1) Specific Logic
-                 print("--- LL(1) PARSING TABLE ---\n")
+                 print("--- LL(1) PARSING TABLE ---\\n")
                  table = generator_ll.compute_ll1_table()
                  self.current_table = table
                  self.current_states = None # No format states for LL(1) in the CLR sense
-                 
-                 # Logic for display in table
-                 # The table returned is {NT: {T: index}}
-                 # We need to adapt it for update_results_table which expects a different structure?
-                 # No, update_results_table expects table[row][col] -> action
-                 # Our LL1 table is table[NT][T] -> prod_index. We should convert index to rule string.
-                 
-                 # Let's adapt the table for display where action is simpler
+
                  display_table = {}
                  for nt, row in table.items():
                      display_table[nt] = {}
                      for term, p_idx in row.items():
-                         # Just show the production body or the full production? User wanted "completes with the value it directs to"
-                         # but also said "don't put arrow". 
-                         # "complete con el valor al que se dirije" -> maybe just the body? or the production index? 
-                         # Usually Parsing Table contains "S->aA" or just "aA". 
-                         # User said: "no es necesario qeu compeltes con de que valor va a que valor y poner la flecha, solo completa con el valor al que se dirije"
-                         # This implies: If rule is A -> alpha, just show "alpha". 
-                          
+          
                          prod = primerosysiguientes.production_list[p_idx]
                          _, body = prod.split("→")
                          display_table[nt][term] = body.strip() # Just the body
-
                  
                  self.current_table = display_table # Use this for display
                  # Capture nothing else for closure as it doesn't exist
@@ -329,7 +328,7 @@ class MainWindow(QMainWindow):
                 generador_clr.t_list = list(generador_clr.tl.keys()) + ['$']
 
                 # Step C: Calc States (Canonical Collection)
-                print("--- CANONICAL COLLECTION (CLOSURE) ---\n")
+                print("--- CANONICAL COLLECTION (CLOSURE) ---\\n")
                 states = generador_clr.calc_states()
                 self.current_states = states
 
@@ -350,7 +349,7 @@ class MainWindow(QMainWindow):
 
         except Exception as e:
             sys.stdout = original_stdout
-            QMessageBox.critical(self, "Execution Error", f"An error occurred:\n{str(e)}")
+            QMessageBox.critical(self, "Execution Error", f"An error occurred:\\n{str(e)}")
             import traceback
             traceback.print_exc()
             return
@@ -492,20 +491,69 @@ class MainWindow(QMainWindow):
         for idx, p in enumerate(prods):
             self.productions_list.addItem(f"{idx}: {p}")
 
-    def export_pdf(self):
-        if not self.current_states and self.algo_selector.currentText() != "LL(1)":
-             QMessageBox.warning(self, "Warning", "Parser must be built first.")
-             return
-        if self.algo_selector.currentText() == "LL(1)":
-             QMessageBox.information(self, "Info", "PDF Export for LL(1) not yet implemented.")
-             return
+    def export_csv(self):
+        # Determine active tab
+        current_index = self.results_panel.tabs.currentIndex()
         
+        target_table = None
+        default_name = "export.csv"
+        
+        if current_index == 0:
+            target_table = self.results_panel.table_widget
+            default_name = "parsing_table.csv"
+        elif current_index == 1:
+            target_table = self.results_panel.first_follow_table
+            default_name = "first_follow.csv"
+        elif current_index == 2:
+            target_table = self.results_panel.parse_steps_table
+            default_name = "parse_simulation.csv"
+            
+        if not target_table or target_table.rowCount() == 0:
+            QMessageBox.warning(self, "Warning", "No data to export in the current tab.")
+            return
+
+        file_path, _ = QFileDialog.getSaveFileName(self, "Save CSV", default_name, "CSV Files (*.csv)")
+        
+        if not file_path:
+            return
+            
         try:
-            # We call the existing export function, but we might need to suppress print or ensure it works
-            generador_clr.export_items_to_pdf(self.current_states, {}, filename="reporte_clr.pdf")
-            QMessageBox.information(self, "PDF Generated", "'reporte_clr.pdf' generated successfully.")
+            with open(file_path, 'w', newline='', encoding='utf-8') as csvfile:
+                writer = csv.writer(csvfile)
+                
+                # Headers
+                headers = []
+                for i in range(target_table.columnCount()):
+                    item = target_table.horizontalHeaderItem(i)
+                    headers.append(item.text() if item else f"Column {i}")
+                
+                # If it's the parsing table, we might want row headers too (Non-Terminals)
+                # In QTableWidget, row headers are usually verticalHeaderItems
+                if current_index == 0: # Parsing Table
+                     # Add a corner header
+                     headers.insert(0, "Non-Terminal")
+                
+                writer.writerow(headers)
+                
+                # Rows
+                for row in range(target_table.rowCount()):
+                    row_data = []
+                    
+                    if current_index == 0: # Parsing Table
+                        # Add row header (NT)
+                        v_item = target_table.verticalHeaderItem(row)
+                        row_data.append(v_item.text() if v_item else f"Row {row}")
+                    
+                    for col in range(target_table.columnCount()):
+                        item = target_table.item(row, col)
+                        row_data.append(item.text() if item else "")
+                    
+                    writer.writerow(row_data)
+                    
+            QMessageBox.information(self, "Success", f"Data exported to {file_path}")
+            
         except Exception as e:
-            QMessageBox.critical(self, "PDF Error", f"Error generating PDF:\n{str(e)}")
+            QMessageBox.critical(self, "Error", f"Failed to export CSV: {str(e)}")
 
 def main():
     app = QApplication(sys.argv)
